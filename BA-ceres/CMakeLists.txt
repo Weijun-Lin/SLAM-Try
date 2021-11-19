@@ -9,4 +9,4 @@ find_package(Sophus REQUIRED)
 file(GLOB srcs ${CMAKE_SOURCE_DIR}/*.cpp)
 
 add_executable(BA-Ceres ${srcs})
-target_link_libraries(BA-Ceres ${OpenCV_LIBS} ${CERES_LIBRARIES})
+target_link_libraries(BA-Ceres ${OpenCV_LIBS} ${CERES_LIBRARIES} Sophus::Sophus)
