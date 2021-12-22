@@ -6,7 +6,9 @@ find_package(Ceres REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(Sophus REQUIRED)
 
-file(GLOB srcs ${CMAKE_SOURCE_DIR}/*.cpp)
+set(main_src main.cpp DataGenerator.cpp BA.cpp)
 
-add_executable(BA-Ceres ${srcs})
+# file(GLOB srcs ${CMAKE_SOURCE_DIR}/*.cpp)
+
+add_executable(BA-Ceres ${main_src})
 target_link_libraries(BA-Ceres ${OpenCV_LIBS} ${CERES_LIBRARIES} Sophus::Sophus)

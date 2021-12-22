@@ -2,23 +2,21 @@
  * @file BA.cpp
  * @author weijun-lin (weijun-lin@foxmail.com)
  * @brief BA 问题类实现，Ceres 损失函数配置
- * @version 0.1
- * @date 2021-11-17
- * 
+ * @version 0.2
+ * @date 2021-12-22
+ *
  * @copyright Copyright (c) 2021
- * 
+ *
  */
 
 #include "BA.h"
-#include <sophus/se3.hpp>
-#include <iostream>
 
+#include <iostream>
+#include <sophus/se3.hpp>
 
 // ------------ 参数化实现 ---------------
-bool SE3LocalParameterization::Plus(
-        const double* x,
-        const double* delta,
-        double* x_plus_delta) const {
+bool SE3LocalParameterization::Plus(const double* x, const double* delta,
+                                    double* x_plus_delta) const {
     const Vector6d lie(x);
     const Vector6d d_lie(delta);
     // 左乘更新
@@ -30,8 +28,10 @@ bool SE3LocalParameterization::Plus(
 }
 
 // 这里是局部偏导 但我们给出的是 (TP)/(kxi) 这里本质应该是 (T)/(kxi)
-// 我们直接在 CostFunction 中计算雅可比矩阵，所以这里不需要了，直接返回一个单位阵
-bool SE3LocalParameterization::ComputeJacobian(const double* x, double* jacobian) const {
+// 我们直接在 CostFunction
+// 中计算雅可比矩阵，所以这里不需要了，直接返回一个单位阵
+bool SE3LocalParameterization::ComputeJacobian(const double* x,
+                                               double* jacobian) const {
     ceres::MatrixRef(jacobian, 6, 6) = ceres::Matrix::Identity(6, 6);
     return true;
 }
@@ -41,14 +41,13 @@ int SE3LocalParameterization::GlobalSize() const { return 6; }
 int SE3LocalParameterization::LocalSize() const { return 6; }
 
 // --------------- 损失函数构建 ----------------------
-BACostFunction::BACostFunction(const Eigen::Vector2d &ui, const Eigen::Matrix3d &K):
-    _ui(ui), _K(K) {}
+BACostFunction::BACostFunction(const Eigen::Vector2d& ui,
+                               const Eigen::Matrix3d& K)
+    : _ui(ui), _K(K) {}
 
 // 计算损失
-bool BACostFunction::Evaluate(
-        double const* const* parameters,
-        double* residuals,
-        double** jacobians) const {
+bool BACostFunction::Evaluate(double const* const* parameters,
+                              double* residuals, double** jacobians) const {
     // 从数组构建位姿和空间点
     Vector6d pose(parameters[0]);
     Eigen::Matrix4d T = Sophus::SE3d::exp(pose).matrix();
@@ -56,8 +55,8 @@ bool BACostFunction::Evaluate(
     Eigen::Vector4d P4;
     P4 << P, 1;
     // 相机投影模型获得重投影点
-    Eigen::Vector3d P_ = (T*P4).head(3);
-    Eigen::Vector3d proj = _K*P_;
+    Eigen::Vector3d P_ = (T * P4).head(3);
+    Eigen::Vector3d proj = _K * P_;
     proj /= proj[2];
     // 损失更新 计算重投影误差
     residuals[0] = _ui[0] - proj[0];
@@ -67,8 +66,7 @@ bool BACostFunction::Evaluate(
     double fx = _K(0, 0), fy = _K(1, 1);
     double X = P_[0], Y = P_[1], Z = P_[2];
     Eigen::Matrix<double, 2, 3> partialP_;
-    partialP_ << fx/Z   ,0      ,-fx*X/(Z*Z),
-                0       ,fy/Z   ,-fy*Y/(Z*Z);
+    partialP_ << fx / Z, 0, -fx * X / (Z * Z), 0, fy / Z, -fy * Y / (Z * Z);
     partialP_ = -partialP_;
     // 然后计算对位姿的导数，根据扰动模型 3*6
     Eigen::Matrix<double, 3, 6> partialP_2pose;
@@ -79,53 +77,51 @@ bool BACostFunction::Evaluate(
     Eigen::Matrix3d R = T.topLeftCorner(3, 3);
     Eigen::Matrix<double, 2, 3> partialP = partialP_ * R;
     // 更新雅可比 注意查看 ceres 雅可比存储规则
-    // 首先需要判断雅可比指针是否为空，nullptr 代表 ceres 在某个阶段不需要这一项雅可比
-    if(jacobians != nullptr && jacobians[0] != nullptr) {
+    // 首先需要判断雅可比指针是否为空，nullptr 代表 ceres
+    // 在某个阶段不需要这一项雅可比
+    if (jacobians != nullptr && jacobians[0] != nullptr) {
         ceres::MatrixRef(jacobians[1], 2, 3) = partialP;
     }
-    if(jacobians != nullptr && jacobians[1] != nullptr) {
+    if (jacobians != nullptr && jacobians[1] != nullptr) {
         ceres::MatrixRef(jacobians[0], 2, 6) = partial_pose;
     }
-    
+
     return true;
 }
 
-// ---------------- BA 问题的构造 -----------------
-BA::BA(const Points3d& pts3d, const Points2d& pts2d, const Eigen::Matrix3d &K):
-    _points3d(pts3d), _points2d(pts2d), _K(K) {
-        _nums = pts3d.size();
-    }
-
-void BA::solve(Eigen::Matrix3d &R, Eigen::Vector3d &t, Points3d &pts3d, bool isSchur) {
-    Sophus::SE3d se3(R, t);
-    double *pose = new double[6];
-    double *pts = new double[3*_nums];
-    ceres::MatrixRef(pose, 6, 1) = se3.log();
+void solveBA(Vector6d& se_T, Points3d& pts3d, Points2d& pts2d,
+             const Eigen::Matrix3d& K, bool isSchur) {
+    assert(pts3d.size() == pts2d.size());
+    int nums = pts3d.size();
+    double* pose = new double[6];
+    double* pts = new double[3 * nums];
+    ceres::MatrixRef(pose, 6, 1) = se_T;
     // 使用空间点初始化
-    for(int i = 0;i < _nums;i++) {
-        pts[i*3+0] = pts3d[i](0);
-        pts[i*3+1] = pts3d[i](1);
-        pts[i*3+2] = pts3d[i](2);
+    for (int i = 0; i < nums; i++) {
+        pts[i * 3 + 0] = pts3d[i](0);
+        pts[i * 3 + 1] = pts3d[i](1);
+        pts[i * 3 + 2] = pts3d[i](2);
     }
     ceres::Problem problem;
     // 舒尔求解顺序
-    ceres::ParameterBlockOrdering *blockOrdering = new ceres::ParameterBlockOrdering();
-    if(isSchur) {
+    ceres::ParameterBlockOrdering* blockOrdering =
+        new ceres::ParameterBlockOrdering();
+    if (isSchur) {
         blockOrdering->AddElementToGroup(pose, 0);
     }
     // 添加残差
-    for(int i = 0;i < _nums;i++) {
-        ceres::CostFunction *costFunction = new BACostFunction(_points2d[i], _K);
-        problem.AddResidualBlock(costFunction, nullptr, pose, pts + 3*i);
-        if(isSchur) {
-            blockOrdering->AddElementToGroup(pts + 3*i, 1);
+    for (int i = 0; i < nums; i++) {
+        ceres::CostFunction* costFunction = new BACostFunction(pts2d[i], K);
+        problem.AddResidualBlock(costFunction, nullptr, pose, pts + 3 * i);
+        if (isSchur) {
+            blockOrdering->AddElementToGroup(pts + 3 * i, 1);
         }
     }
     // 添加位姿的参数化
     problem.SetParameterization(pose, new SE3LocalParameterization());
     // 配置求解器
     ceres::Solver::Options option;
-    if(isSchur) {
+    if (isSchur) {
         // 配置舒尔求解
         option.linear_solver_type = ceres::DENSE_SCHUR;
         option.linear_solver_ordering.reset(blockOrdering);
@@ -140,17 +136,11 @@ void BA::solve(Eigen::Matrix3d &R, Eigen::Vector3d &t, Points3d &pts3d, bool isS
     std::cout << summary.BriefReport() << std::endl;
     // 输出对应结果
     Eigen::Map<Vector6d> pose_vec(pose);
-    Eigen::Matrix4d T_ = Sophus::SE3d::exp(pose_vec).matrix();
-    for(int i = 0;i < _nums;i++) {
-        pts3d[i] << pts[i*3 + 0], pts[i*3 + 1], pts[i*3 + 2];
-    }
-    // 更新数据
-    R = T_.block(0, 0, 3, 3);
-    t = T_.block(0, 3, 3, 1);
-    for(int i = 0;i < _nums;i++) {
-        pts3d[i] << pts[3*i + 0], pts[3*i + 1], pts[3*i + 2];
+    se_T = pose_vec;
+    for (int i = 0; i < nums; i++) {
+        pts3d[i] << pts[i * 3 + 0], pts[i * 3 + 1], pts[i * 3 + 2];
     }
     // 释放内存
-    delete [] pose;
-    delete [] pts;
+    delete[] pose;
+    delete[] pts;
 }
